@@ -1,9 +1,12 @@
 import { useRouter } from "expo-router";
-import React, { useMemo, useState } from "react";
+import { createUserWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import React, { useEffect, useMemo, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { auth, db } from "@/firebase/firebaseConfig";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -21,6 +24,16 @@ export default function RegisterScreen() {
 	const canSubmit = useMemo(() => {
 		return !submitting;
 	}, [submitting]);
+
+	useEffect(() => {
+		const unsubscribe = onAuthStateChanged(auth, (user) => {
+			if (user) {
+				router.replace("/");
+			}
+		});
+
+		return unsubscribe;
+	}, [router]);
 
 	const handleSubmit = async (e?: unknown) => {
 		try {
@@ -54,21 +67,18 @@ export default function RegisterScreen() {
 
 		setSubmitting(true);
 		try {
-			// Mock API request
-			const res = await fetch("/api/auth/register", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ email: email.trim(), password, imageName: imageName || null }),
+			const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+			const currentUser = credential.user;
+
+			await setDoc(doc(db, "users", currentUser.uid), {
+				uid: currentUser.uid,
+				email: currentUser.email ?? "",
+				firstName: "",
+				lastName: "",
+				profileImageUrl: imageName.trim() || "",
+				createdAt: serverTimestamp(),
 			});
 
-			if (!res.ok) {
-				throw new Error("Registration failed.");
-			}
-
-			// Placeholder: expect { token: string }
-			await res.json().catch(() => null);
-
-			// Redirect after registration
 			router.replace("/");
 		} catch (err) {
 			const message = err instanceof Error ? err.message : "Registration failed.";

@@ -1,13 +1,14 @@
 import { useRouter } from "expo-router";
-import React, { useMemo, useState } from "react";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { addDoc, collection, doc, onSnapshot, serverTimestamp, writeBatch } from "firebase/firestore";
+import React, { useEffect, useMemo, useState } from "react";
 import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { auth, db } from "@/firebase/firebaseConfig";
 
 type TankTag = "STANDARD" | "PREMIUM";
-
-type TankClass = "LIGHT" | "MEDIUM" | "HEAVY" | "ASSAULT";
 
 type Tank = {
 	id: string;
@@ -18,6 +19,7 @@ type Tank = {
 	categoryLabel: string;
 	price: number;
 	imageUri?: any;
+	stockStatus?: string;
 };
 
 type ProductCategory = {
@@ -86,10 +88,70 @@ export default function MarketplaceHome() {
 	const [cart, setCart] = useState<CartItem[]>([]);
 	const [showCart, setShowCart] = useState(false);
 	const [themeMode, setThemeMode] = useState<"light" | "dark">("dark");
+	const [tanks, setTanks] = useState<Tank[]>([]);
+	const [userEmail, setUserEmail] = useState<string | null>(null);
 	const cartCount = useMemo(() => cart.reduce((sum, it) => sum + it.qty, 0), [cart]);
 	const cartTotal = useMemo(() => cart.reduce((sum, it) => sum + it.price * it.qty, 0), [cart]);
 
+	useEffect(() => {
+		const unsubscribe = onAuthStateChanged(auth, (user) => {
+			setUserEmail(user?.email ?? null);
+			if (!user) {
+				router.replace("/login");
+			}
+		});
+
+		return unsubscribe;
+	}, [router]);
+
+	useEffect(() => {
+		const tankRef = collection(db, "tanks");
+		return onSnapshot(
+			tankRef,
+			(snapshot) => {
+				const loadedTanks = snapshot.docs.map((docSnap) => {
+					const data = docSnap.data() as Record<string, any>;
+					const imageUrl = typeof data.imageUrl === "string" ? data.imageUrl.trim() : "";
+					const classification = typeof data.classification === "string" ? data.classification : "";
+					const era = typeof data.era === "string" ? data.era : "";
+					const price = typeof data.price === "number" ? data.price : Number(data.price) || 0;
+					return {
+						id: docSnap.id,
+						name: data.name ?? "Untitled Tank",
+						tag: (data.stockStatus?.toString().toUpperCase() === "PREMIUM" ? "PREMIUM" : "STANDARD") as TankTag,
+						type: data.type ?? "",
+						origin: era,
+						categoryLabel: classification ? `${classification}${era ? ` - ${era}` : ""}` : (data.type ?? ""),
+						price,
+						imageUri: imageUrl ? { uri: imageUrl } : require("@/assets/images/puma-ifv.webp"),
+						stockStatus: data.stockStatus,
+					};
+				});
+				setTanks(loadedTanks);
+			},
+			(error) => {
+				console.warn("Tanks snapshot failed", error);
+			},
+		);
+	}, [tanks]);
+
 	const data = useMemo<ProductCategory[]>(() => {
+		if (tanks.length > 0) {
+			const grouped = new Map<string, Tank[]>();
+			tanks.forEach((tank) => {
+				const key = tank.categoryLabel || tank.type || "TANKS";
+				const group = grouped.get(key) ?? [];
+				group.push(tank);
+				grouped.set(key, group);
+			});
+
+			return Array.from(grouped.entries()).map(([key, list]) => ({
+				key,
+				title: key,
+				tanks: list,
+			}));
+		}
+
 		return [
 			{
 				key: "light",
@@ -191,7 +253,7 @@ export default function MarketplaceHome() {
 				],
 			},
 		];
-	}, []);
+	}, [tanks]);
 
 	const selectedTank = useMemo(() => {
 		if (!selectedTankId) return null;
@@ -219,21 +281,80 @@ export default function MarketplaceHome() {
 	}
 
 	function handleCartPress() {
-		console.log("Cart pressed");
 		setShowCart(true);
 	}
 
 	function handleThemePress() {
-		console.log("Theme pressed");
 		setThemeMode((prev) => (prev === "dark" ? "light" : "dark"));
 	}
 
-	function handleLogout() {
-		console.log("Logout pressed");
-		if (router?.push) {
-			router.push("/login");
-		} else {
-			Alert.alert("Logged out");
+	async function handleLogout() {
+		try {
+			await signOut(auth);
+			router.replace("/login");
+		} catch (error) {
+			Alert.alert("Logout failed", String(error));
+		}
+	}
+
+	async function handleCheckout() {
+		if (!cart.length) {
+			Alert.alert("Your cart is empty.");
+			return;
+		}
+
+		const currentUser = auth.currentUser;
+		if (!currentUser) {
+			router.replace("/login");
+			return;
+		}
+
+		try {
+			const orderRef = await addDoc(collection(db, "orders"), {
+				userId: currentUser.uid,
+				totalAmount: cartTotal,
+				status: "pending",
+				createdAt: serverTimestamp(),
+				updatedAt: serverTimestamp(),
+			});
+
+			const batch = writeBatch(db);
+			cart.forEach((item) => {
+				const orderItemRef = doc(collection(db, "orderItems"));
+				batch.set(orderItemRef, {
+					orderId: orderRef.id,
+					tankId: item.tankId,
+					tankName: item.name,
+					price: item.price,
+					quantity: item.qty,
+					createdAt: serverTimestamp(),
+				});
+			});
+
+			const paymentRef = doc(collection(db, "payments"));
+			batch.set(paymentRef, {
+				orderId: orderRef.id,
+				userId: currentUser.uid,
+				amount: cartTotal,
+				method: "cash",
+				status: "pending",
+				proofImageUrl: "",
+				createdAt: serverTimestamp(),
+			});
+
+			const activityRef = doc(collection(db, "activityLogs"));
+			batch.set(activityRef, {
+				userId: currentUser.uid,
+				action: "checkout_created",
+				details: `Created checkout order ${orderRef.id} with ${cart.length} items`,
+				createdAt: serverTimestamp(),
+			});
+
+			await batch.commit();
+			setCart([]);
+			Alert.alert("Order placed", "Your order has been created successfully.");
+		} catch (error) {
+			Alert.alert("Checkout failed", String(error));
 		}
 	}
 
@@ -251,7 +372,7 @@ export default function MarketplaceHome() {
 					</ThemedText>
 
 					<View style={styles.navRight}>
-						<ThemedText style={styles.email}>test@example.com</ThemedText>
+						<ThemedText style={styles.email}>{userEmail ?? "Guest"}</ThemedText>
 
 						{/* CART BUTTON (alive) */}
 						<Pressable accessibilityRole="button" style={({ pressed }) => [styles.cartBtn, pressed && { opacity: 0.9 }]} onPress={handleCartPress}>
@@ -267,17 +388,10 @@ export default function MarketplaceHome() {
 						</Pressable>
 
 						{/* SWITCH THEME BUTTON */}
-						<Pressable
-							accessibilityRole="button"
-							style={({ pressed }) => [styles.switchThemeBtn, pressed && { opacity: 0.9 }]}
-							onPress={() => {
-								// TODO: connect to a real theme toggle. For now it's an interactive button.
-								console.log("Switch to light and dark mode");
-							}}>
-							<ThemedText style={styles.switchThemeText}>Switch to light and dark mode</ThemedText>
+						<Pressable accessibilityRole="button" style={({ pressed }) => [styles.switchThemeBtn, pressed && { opacity: 0.9 }]} onPress={handleThemePress}>
+							<ThemedText style={styles.switchThemeText}>Switch to {themeMode === "dark" ? "light" : "dark"} mode</ThemedText>
 						</Pressable>
-
-						<Pressable accessibilityRole="button" style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.85 }]}>
+						<Pressable accessibilityRole="button" style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.85 }]} onPress={handleLogout}>
 							<ThemedText style={styles.logoutText}>Logout</ThemedText>
 						</Pressable>
 					</View>
@@ -540,9 +654,9 @@ export default function MarketplaceHome() {
 								<Pressable
 									accessibilityRole="button"
 									style={({ pressed }) => [styles.checkoutBtn, pressed && { backgroundColor: "#a41e18" }]}
-									onPress={() => {
+									onPress={async () => {
 										setShowCart(false);
-										// Handle checkout here
+										await handleCheckout();
 									}}>
 									<ThemedText style={styles.checkoutBtnText}>CHECKOUT</ThemedText>
 								</Pressable>

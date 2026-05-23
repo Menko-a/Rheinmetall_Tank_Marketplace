@@ -1,9 +1,11 @@
 import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import { onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
+import React, { useEffect, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { auth } from "@/firebase/firebaseConfig";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -16,9 +18,17 @@ export default function LoginScreen() {
 	const [error, setError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 
+	useEffect(() => {
+		const unsubscribe = onAuthStateChanged(auth, (user) => {
+			if (user) {
+				router.replace("/");
+			}
+		});
+
+		return unsubscribe;
+	}, [router]);
+
 	const handleSubmit = async (e?: unknown) => {
-		// Spec: prevent default browser reloading
-		// (In React Native, this is effectively a no-op, but harmless.)
 		try {
 			// @ts-expect-error - e may not be a DOM event in RN
 			e?.preventDefault?.();
@@ -40,33 +50,8 @@ export default function LoginScreen() {
 
 		setSubmitting(true);
 		try {
-			const res = await fetch("/api/auth/login", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({ email: email.trim(), password }),
-			});
-
-			if (!res.ok) {
-				throw new Error("Invalid credentials.");
-			}
-
-			// Placeholder: expect { token: string }
-			const data = (await res.json().catch(() => null)) as { token?: string } | null;
-
-			const token = data?.token ?? "mock-jwt-token";
-
-			// Spec: save mock JWT token to localStorage (web best-effort)
-			if (typeof globalThis !== "undefined" && "localStorage" in globalThis) {
-				globalThis.localStorage.setItem("jwt", token);
-			}
-
-			// eslint-disable-next-line no-console
-			console.log("Login success", token);
-
-			// In a real app, you would navigate to a protected area.
-			// router.replace('/');
+			await signInWithEmailAndPassword(auth, email.trim(), password);
+			router.replace("/");
 		} catch (err) {
 			const message = err instanceof Error ? err.message : "Login failed.";
 			setError(message);
