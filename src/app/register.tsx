@@ -36,6 +36,7 @@ export default function RegisterScreen() {
 	}, [router]);
 
 	const handleSubmit = async (e?: unknown) => {
+		console.log("Register submit pressed");
 		try {
 			// @ts-expect-error - e may not be a DOM event in RN
 			e?.preventDefault?.();
@@ -156,10 +157,9 @@ export default function RegisterScreen() {
 							accessibilityRole="button"
 							onPress={() => handleSubmit(undefined)}
 							disabled={!canSubmit}
-							style={({ pressed }) => [styles.button, pressed ? styles.buttonPressed : null, submitting ? styles.buttonDisabled : null]}>
-							<ThemedText type="linkPrimary" style={styles.buttonText}>
-								{submitting ? "Creating…" : "Create account"}
-							</ThemedText>
+							hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+							style={({ pressed }) => [styles.button, pressed ? styles.buttonPressed : null, !canSubmit ? styles.buttonDisabled : null]}>
+							<ThemedText style={styles.buttonText}>{submitting ? "Creating…" : "Create account"}</ThemedText>
 						</Pressable>
 
 						<View style={styles.footer}>

@@ -60,6 +60,11 @@ export default function LoginScreen() {
 		}
 	};
 
+	const handleRegisterLink = () => {
+		console.log("Register link pressed");
+		router.push("/register");
+	};
+
 	return (
 		<KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
 			<View style={styles.center}>
@@ -116,17 +121,14 @@ export default function LoginScreen() {
 								{submitting ? "Signing in…" : "Login"}
 							</ThemedText>
 						</Pressable>
-
 						{/* Footer */}
 						<View style={styles.footer}>
 							<ThemedText style={styles.footerText}>Don&apos;t have an account? </ThemedText>
 							<Pressable
 								accessibilityRole="link"
-								onPress={() => {
-									// If a /register route exists, this will work.
-									// Otherwise, it will still attempt navigation.
-									router.push("/register" as never);
-								}}>
+								onPress={handleRegisterLink}
+								hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+								style={styles.linkPressable}>
 								<ThemedText style={styles.registerLink}>Register</ThemedText>
 							</Pressable>
 						</View>
@@ -241,5 +243,9 @@ const styles = StyleSheet.create({
 		color: CRIMSON,
 		fontSize: 13,
 		fontWeight: "800",
+	},
+	linkPressable: {
+		paddingVertical: 2,
+		paddingHorizontal: 4,
 	},
 });
